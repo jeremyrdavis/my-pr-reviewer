@@ -7,6 +7,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import javax.sql.DataSource;
 
+/**
+ * Service for registering users.
+ */
 public class RegistrationService {
 
     private static final String UNIQUE_VIOLATION = "23505";
