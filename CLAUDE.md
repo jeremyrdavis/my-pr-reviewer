@@ -28,7 +28,7 @@ A GitHub Actions workflow that reviews pull requests with a Copilot agent runnin
 ## Commands
 
 - Workflow script tests (no sbx, Docker or network needed): `./tests/run.sh`, or one file, for example `bash tests/resolve-pr.test.sh`.
-- The sample app's tests (Docker only): `./scripts/test-in-docker.sh`.
+- The sample app's tests (Docker only): `./scripts/test-in-docker.sh`, or one test, for example `./scripts/test-in-docker.sh -Dtest=RegistrationServiceIT#rejectsExactDuplicate` (extra arguments pass through to Maven before the `test` goal).
 - Lint (the tools aren't installed locally; run them in containers): `koalaman/shellcheck` with `-x -P SCRIPTDIR` on every `*.sh` and `tests/stubs/*`; `rhysd/actionlint` with the workflow files as explicit arguments (it needs a git repo, or explicit paths); `yamllint` (relaxed, no line-length rule) on `.github`.
 
 ## Conventions
