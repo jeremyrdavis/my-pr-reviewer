@@ -70,6 +70,7 @@ jobs:
         run: .github/scripts/resolve-pr.sh
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           DISPATCH_PR: ${{ inputs.pr-number }}
