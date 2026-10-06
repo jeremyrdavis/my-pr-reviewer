@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Fake `sbx`: emulates just enough of the CLI to exercise run-agent.sh.
+# STUB_AGENT:  ok (default) | fail | noresult | symlink | big
+# STUB_POLICY: governed (allow refused by org policy) | broken (allow fails otherwise)
+# Never log the arguments of `sbx secret`: they hold a token.
+if [[ "$1" == secret ]]; then echo "sbx secret $2" >> "${STUB_DIR}/calls.log"; else echo "sbx $*" | cut -c1-200 >> "${STUB_DIR}/calls.log"; fi
+case "$1" in
+  daemon)
+    if [[ "$2" == status ]]; then echo "daemon running"; elif [[ "$2" == start ]]; then sleep 1; fi ;;
+  login) cat > /dev/null; echo "Login succeeded" ;;
+  policy)
+    if [[ "$2" == allow && "${STUB_POLICY:-}" == governed ]]; then
+      echo 'error: network policy for these hosts is managed by your organization; local allow rules are not applied' >&2; exit 1
+    elif [[ "$2" == allow && "${STUB_POLICY:-}" == broken ]]; then
+      echo 'error: daemon unreachable' >&2; exit 1
+    fi ;;
+  secret) ;;
+  create)
+    cat > /dev/null
+    echo "create workspace: ${*: -1}" >> "${STUB_DIR}/calls.log"
+    rm -rf "${STUB_DIR}/clone"
+    git clone -q "${*: -1}" "${STUB_DIR}/clone" ;;
+  exec)
+    shift 2
+    echo "Sandbox started successfully"            # noise on stdout, like the real CLI
+    cd "${STUB_DIR}/clone" || exit 1
+    if [[ "$1" == copilot ]]; then
+      shift
+      while [[ $# -gt 0 ]]; do [[ "$1" == -p ]] && printf '%s' "$2" > "${STUB_DIR}/prompt.txt"; shift; done
+      case "${STUB_AGENT:-ok}" in
+        fail) echo "Error: Authentication failed"; exit 1 ;;
+        noresult) echo "done, but forgot to write the file" ;;
+        symlink) ln -sf /etc/hostname REVIEW.md ;;
+        big) head -c 300000 /dev/zero | tr '\0' 'a' > REVIEW.md ;;
+        *) printf '## Summary\nLooks good. @octocat\n' > REVIEW.md; echo "agent finished" ;;
+      esac
+      exit 0
+    fi
+    exec "$@" ;;
+  rm) echo "removed" ;;
+  ls) echo "NAME STATUS" ;;
+  version) echo "sbx stub" ;;
+esac
+exit 0

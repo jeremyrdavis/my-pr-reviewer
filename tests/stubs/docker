@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "docker $1" >> "${STUB_DIR}/calls.log"
+[[ "$1" == login ]] && cat > /dev/null
+exit 0

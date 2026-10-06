@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Fake `gh` for tests. Files in $STUB_DIR drive it:
+#   pr.json        returned for GET repos/*/pulls/*
+#   comments.json  returned for GET repos/*/issues/*/comments
+# Calls are logged to gh.log; PATCH/POST are logged to actions.log and the comment body
+# is copied to body.md.
+echo "gh $*" >> "${STUB_DIR}/gh.log"
+[[ "$1" == api ]] || exit 0
+shift
+method=GET
+path=""
+bodyfile=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --paginate) ;;
+    --method) method="$2"; shift ;;
+    -F) [[ "$2" == body=@* ]] && bodyfile="${2#body=@}"; shift ;;
+    *) path="$1" ;;
+  esac
+  shift
+done
+case "${method} ${path}" in
+  "GET repos/"*"/pulls/"*) cat "${STUB_DIR}/pr.json" ;;
+  "GET repos/"*"/issues/"*"/comments"*) cat "${STUB_DIR}/comments.json" ;;
+  "PATCH repos/"*"/issues/comments/"*)
+    echo "PATCH ${path##*/}" >> "${STUB_DIR}/actions.log"
+    cp "${bodyfile}" "${STUB_DIR}/body.md" ;;
+  "POST repos/"*"/issues/"*"/comments")
+    echo "POST" >> "${STUB_DIR}/actions.log"
+    cp "${bodyfile}" "${STUB_DIR}/body.md" ;;
+esac
+exit 0

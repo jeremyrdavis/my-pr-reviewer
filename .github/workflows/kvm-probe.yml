@@ -1,0 +1,30 @@
+name: KVM probe
+
+# Docker Sandboxes run in a microVM, which needs /dev/kvm. Nested virtualization on
+# GitHub-hosted runners is not officially guaranteed, so run this before a full agent run.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check CPU virtualization flags
+        run: |
+          if grep -Eq 'vmx|svm' /proc/cpuinfo; then
+            echo "CPU virtualization flags present"
+          else
+            echo "::warning::No vmx/svm flag in /proc/cpuinfo"
+          fi
+
+      - name: Check /dev/kvm
+        run: |
+          ls -l /dev/kvm || true
+          if [ -e /dev/kvm ] && sudo test -r /dev/kvm && sudo test -w /dev/kvm; then
+            echo "/dev/kvm is present and accessible"
+          else
+            echo "::error::/dev/kvm is missing or not accessible on this runner. Docker Sandboxes need KVM. See 'Runner requirements' in the README for self-hosted runner notes."
+            exit 1
+          fi

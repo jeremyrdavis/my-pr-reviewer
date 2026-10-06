@@ -1,0 +1,85 @@
+name: Run an agent in a Docker Sandbox
+description: >
+  Installs Docker Sandboxes (sbx), starts a Copilot agent in a microVM with its own
+  Docker daemon, and copies one result file out of it. The agent gets no write token.
+
+inputs:
+  prompt-file:
+    description: Prompt for the agent. Absolute, or relative to the job's workspace directory.
+    required: true
+  workspace:
+    description: >
+      Directory cloned into the sandbox. Absolute, or relative to the job's workspace
+      directory. Empty uses the job's workspace directory.
+    required: false
+    default: ""
+  result-path:
+    description: File the agent writes, relative to the sandbox workspace. It is copied out.
+    required: true
+  docker-username:
+    description: Docker Hub username used to log in to sbx.
+    required: true
+  docker-pat:
+    description: Docker Hub personal access token (Read scope is enough).
+    required: true
+  copilot-token:
+    description: >
+      Fine-grained PAT with the Copilot Requests permission and nothing else. It is stored
+      as an sbx secret, so the sandbox never sees the real value.
+    required: true
+  network-preset:
+    description: Local sbx network preset (allow-all, balanced or deny-all). Ignored under organization governance.
+    required: false
+    default: balanced
+  allowed-hosts:
+    description: Extra hosts to allow, separated by commas, spaces or newlines.
+    required: false
+    default: ""
+  agent-timeout-minutes:
+    description: How long the agent may run before it is stopped.
+    required: false
+    default: "20"
+  sbx-version:
+    description: Pin the docker-sbx apt package version. Empty installs the latest.
+    required: false
+    default: ""
+  output-dir:
+    description: Directory for the result and agent log. Empty uses a folder under the runner temp directory.
+    required: false
+    default: ""
+
+outputs:
+  has-result:
+    description: "'true' when the agent wrote the result file."
+    value: ${{ steps.run.outputs.has-result }}
+  result-file:
+    description: Path of the copied result on the runner.
+    value: ${{ steps.run.outputs.result-file }}
+  output-dir:
+    description: Directory holding result.md and agent.log.
+    value: ${{ steps.run.outputs.output-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Docker Sandboxes
+      shell: bash
+      env:
+        SBX_VERSION: ${{ inputs.sbx-version }}
+      run: ${{ github.action_path }}/install-sbx.sh
+
+    - name: Run the agent in a sandbox
+      id: run
+      shell: bash
+      env:
+        DOCKER_USERNAME: ${{ inputs.docker-username }}
+        DOCKER_PAT: ${{ inputs.docker-pat }}
+        COPILOT_TOKEN: ${{ inputs.copilot-token }}
+        PROMPT_FILE: ${{ inputs.prompt-file }}
+        WORKSPACE: ${{ inputs.workspace }}
+        RESULT_PATH: ${{ inputs.result-path }}
+        NETWORK_PRESET: ${{ inputs.network-preset }}
+        ALLOWED_HOSTS: ${{ inputs.allowed-hosts }}
+        AGENT_TIMEOUT_MINUTES: ${{ inputs.agent-timeout-minutes }}
+        OUT_DIR: ${{ inputs.output-dir }}
+      run: ${{ github.action_path }}/run-agent.sh

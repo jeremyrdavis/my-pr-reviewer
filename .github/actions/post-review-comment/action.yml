@@ -1,0 +1,47 @@
+name: Post the AI review as a sticky pull request comment
+description: >
+  Sanitizes the agent's review and creates or updates a single comment owned by the
+  Actions bot. Needs pull-requests: write and a checkout that contains this action.
+
+inputs:
+  pr-number:
+    description: Pull request number.
+    required: true
+  state:
+    description: reviewed, failed or skipped.
+    required: true
+  body-file:
+    description: Path to the agent's review (state reviewed).
+    required: false
+    default: ""
+  message:
+    description: Notice text for state skipped. It must come from the workflow, not from the pull request.
+    required: false
+    default: ""
+  head-sha:
+    description: Commit that was reviewed.
+    required: false
+    default: ""
+  run-url:
+    description: Link to the workflow run.
+    required: false
+    default: ""
+  token:
+    description: Token used to read and write comments.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Create or update the comment
+      shell: bash
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+        REPO: ${{ github.repository }}
+        STATE: ${{ inputs.state }}
+        BODY_FILE: ${{ inputs.body-file }}
+        MESSAGE: ${{ inputs.message }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        RUN_URL: ${{ inputs.run-url }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: ${{ github.action_path }}/post-comment.sh

@@ -1,0 +1,195 @@
+name: "PR review: Copilot in a Docker Sandbox"
+
+# Reviews every pull request with a sandboxed agent and posts one sticky comment.
+#
+# SECURITY: this uses pull_request_target so that pull requests from forks can use the
+# repository's secrets. That is only safe because of how the jobs are split:
+#   - the workflow, the scripts and the prompt always come from the BASE branch;
+#   - the pull request's code is checked out into ./pr and is only ever handed to the
+#     sandbox (a microVM). Nothing on the runner executes it;
+#   - the job that runs the agent has a read-only token; a separate job posts the comment.
+# Never add a step that runs files from ./pr, and never put pull request text (title,
+# body, branch names) inside a `run:` script. Pass it through `env:` instead.
+#
+# Repository variables (all optional):
+#   AI_REVIEW_ENABLED       'false' switches the reviewer off
+#   AI_REVIEW_TRUST         'everyone' (default) or 'trusted' (owners, members and
+#                           collaborators automatically; others need the 'ai-review' label)
+#   AI_REVIEW_TEST_COMMAND  command the reviewer runs; default ./scripts/test-in-docker.sh,
+#                           'none' skips running tests
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: Number of the pull request to review
+        required: true
+
+# Nothing by default. Each job asks for exactly what it needs.
+permissions: {}
+
+# A new push (or a manual re-run) replaces a stale review of the same pull request.
+# Adding an unrelated label starts a run that will be skipped, so it gets its own group:
+# otherwise it would cancel a review that is in progress and then skip itself.
+concurrency:
+  group: >-
+    ${{ (github.event.action == 'labeled' && github.event.label.name != 'ai-review')
+    && format('pr-review-ignored-{0}', github.run_id)
+    || format('pr-review-{0}', github.event.pull_request.number || inputs.pr-number) }}
+  cancel-in-progress: true
+
+jobs:
+  # Decides whether to review, using only trusted code from the base branch.
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.resolve.outputs.run }}
+      notify: ${{ steps.resolve.outputs.notify }}
+      number: ${{ steps.resolve.outputs.number }}
+      head_repo: ${{ steps.resolve.outputs.head_repo }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_repo: ${{ steps.resolve.outputs.base_repo }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+      author: ${{ steps.resolve.outputs.author }}
+      title: ${{ steps.resolve.outputs.title }}
+      body_b64: ${{ steps.resolve.outputs.body_b64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Decide whether to review
+        id: resolve
+        run: .github/scripts/resolve-pr.sh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_PR: ${{ inputs.pr-number }}
+          ENABLED: ${{ vars.AI_REVIEW_ENABLED }}
+          TRUST_MODE: ${{ vars.AI_REVIEW_TRUST }}
+
+  # Runs the agent in a Docker Sandbox. Read-only token: it cannot write to the repository.
+  review:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.run == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      # Trusted code: scripts, prompt and actions from the base branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # Untrusted code: the pull request, fork-aware. It is never executed on the runner.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.prepare.outputs.head_repo }}
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the pull request for diffing
+        run: ./trusted/.github/scripts/prepare-git.sh
+        env:
+          PR_DIR: pr
+          BASE_REPO: ${{ needs.prepare.outputs.base_repo }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build the review prompt
+        run: ./trusted/.github/scripts/build-prompt.sh
+        env:
+          TEMPLATE: trusted/.github/prompts/pr-review.md
+          OUT: ${{ runner.temp }}/review-prompt.md
+          PR_NUMBER: ${{ needs.prepare.outputs.number }}
+          PR_AUTHOR: ${{ needs.prepare.outputs.author }}
+          BASE_REF: ${{ needs.prepare.outputs.base_ref }}
+          HEAD_REPO: ${{ needs.prepare.outputs.head_repo }}
+          PR_TITLE: ${{ needs.prepare.outputs.title }}
+          PR_BODY_B64: ${{ needs.prepare.outputs.body_b64 }}
+          TEST_COMMAND: ${{ vars.AI_REVIEW_TEST_COMMAND || './scripts/test-in-docker.sh' }}
+
+      - name: Review the pull request in a Docker Sandbox
+        id: agent
+        uses: ./trusted/.github/actions/sbx-agent
+        with:
+          prompt-file: ${{ runner.temp }}/review-prompt.md
+          workspace: pr
+          result-path: REVIEW.md
+          docker-username: ${{ secrets.DOCKER_USERNAME }}
+          docker-pat: ${{ secrets.DOCKER_PAT }}
+          copilot-token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          # Ignored when your Docker organization has governance enabled: the
+          # organization's network rules decide what the sandbox can reach.
+          network-preset: balanced
+          allowed-hosts: |
+            github.com
+            api.github.com
+            *.githubusercontent.com
+            *.githubcopilot.com
+            registry-1.docker.io
+            auth.docker.io
+            production.cloudflare.docker.com
+            repo.maven.apache.org
+            repo1.maven.org
+          agent-timeout-minutes: "20"
+
+      - name: Upload the review and agent log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-review-output
+          path: ${{ steps.agent.outputs.output-dir }}
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # Posts the comment. Can write to pull requests, but runs no agent and no sandbox.
+  comment:
+    needs: [prepare, review]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+      (needs.prepare.outputs.run == 'true' || needs.prepare.outputs.notify != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Download the review
+        if: ${{ needs.review.result == 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pr-review-output
+          path: ${{ runner.temp }}/pr-review-output
+
+      - name: Post the comment
+        uses: ./.github/actions/post-review-comment
+        with:
+          pr-number: ${{ needs.prepare.outputs.number }}
+          state: >-
+            ${{ needs.prepare.outputs.run != 'true' && 'skipped' ||
+            (needs.review.result == 'success' && 'reviewed' || 'failed') }}
+          body-file: ${{ runner.temp }}/pr-review-output/result.md
+          message: ${{ needs.prepare.outputs.notify }}
+          head-sha: ${{ needs.prepare.outputs.head_sha }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          token: ${{ github.token }}
